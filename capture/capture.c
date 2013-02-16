@@ -11,12 +11,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <limits.h>
 
 #include <getopt.h>             /* getopt_long() */
 
 #include <fcntl.h>              /* low-level i/o */
 #include <unistd.h>
 #include <errno.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -51,6 +53,9 @@ static int out_buf;
 static int force_format;
 static int frame_count = 200;
 static int frame_number = 0;
+static int loop = 0;
+static char *file_tmpl = NULL;
+static FILE *fp_out;
 
 static void errno_exit(const char *s)
 {
@@ -87,7 +92,7 @@ static void process_image(const void *p, int size)
     else
     {
         /* write to stdout */
-        write(1, p, size);
+        fwrite(p, size, 1, fp_out);
     }
 }
 
@@ -525,7 +530,7 @@ static void init_device(void)
 		fmt.fmt.pix.sizeimage = min;
 
 	switch (io) {
-	case IO_METHOD_READ:
+ 	case IO_METHOD_READ:
 		init_read(fmt.fmt.pix.sizeimage);
 		break;
 
@@ -582,14 +587,15 @@ static void usage(FILE *fp, int argc, char **argv)
 	        "-m | --mmap          Use memory mapped buffers [default]\n"
 	        "-r | --read          Use read() calls\n"
 	        "-u | --userp         Use application allocated buffers\n"
-	        "-o | --output        Outputs stream to stdout\n"
+	        "-o | --output        Outputs stream to stdout (long format)\n"
 	        "-f | --format        Force format to 640x480 H264\n"
-	        "-c | --count         Number of frames to grab [%i]\n"
+	        "-c | --count         Number of frames to grab [%i] (in each loop)\n"
+		"-l | --loop          Loop forever\n"
 	        "",
 	        argv[0], dev_name, frame_count);
 }
 
-static const char short_options[] = "d:hmruofc:";
+static const char short_options[] = "d:hmruofc:l";
 
 static const struct option
         long_options[] = {
@@ -598,15 +604,17 @@ static const struct option
 	{ "mmap",   no_argument,       NULL, 'm' },
 	{ "read",   no_argument,       NULL, 'r' },
 	{ "userp",  no_argument,       NULL, 'u' },
-	{ "output", no_argument,       NULL, 'o' },
+	{ "output", optional_argument, NULL, 'o' },
 	{ "format", no_argument,       NULL, 'f' },
 	{ "count",  required_argument, NULL, 'c' },
+	{ "loop",   no_argument,       NULL, 'l' },
 	{ 0, 0, 0, 0 }
 };
 
 int main(int argc, char **argv)
 {
 	dev_name = "/dev/video0";
+	fp_out = stdout;
 
 	for (;; ) {
 		int idx;
@@ -644,10 +652,15 @@ int main(int argc, char **argv)
 
 		case 'o':
 			out_buf++;
+			file_tmpl = optarg; /* null if not set */
 			break;
 
 		case 'f':
 			force_format++;
+			break;
+
+		case 'l':
+			loop++;
 			break;
 
 		case 'c':
@@ -666,7 +679,23 @@ int main(int argc, char **argv)
 	open_device();
 	init_device();
 	start_capturing();
-	mainloop();
+	do {
+	  if (file_tmpl != NULL) {
+	    char file_name[PATH_MAX];
+	    time_t t;
+	    struct tm *ltime;
+	    t=time(NULL);
+	    ltime = localtime(&t);
+	    strftime (file_name, PATH_MAX, file_tmpl, ltime);
+	    if ((fp_out = fopen (file_name, "wb")) == NULL) {
+	      errno_exit (file_name);
+	    }
+	  }
+	  mainloop();
+	  if (file_tmpl != NULL) {
+	    fclose (fp_out);
+	  }
+	} while (loop);
 	stop_capturing();
 	uninit_device();
 	close_device();
